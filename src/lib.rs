@@ -1,3 +1,6 @@
+// This implementation is based on the Java version
+// https://github.com/dynatrace-oss/hash4j/
+
 // Constants for UltraLogLog implementation
 const MIN_P: u32 = 3;
 const MAX_P: u32 = 26; // 32 - 6 (same as Java implementation)
