@@ -1,0 +1,10 @@
+[package]
+name = "evl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ultraloglog = { path = ".." }
+rand = "0.8"
+clap = "3.0.0-beta.1"
+rayon = "1.1" 
