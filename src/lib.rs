@@ -58,7 +58,7 @@ impl UltraLogLog {
     /// The precision parameter `p` must be in the range {3, 4, 5, ..., 25, 26}.
     /// It defines the size of the internal state, which is a byte array of length 2^p.
     pub fn new(p: u32) -> Result<Self, &'static str> {
-        if p < MIN_P || p > MAX_P {
+        if !(MIN_P..=MAX_P).contains(&p) {
             return Err("Invalid precision parameter");
         }
         Ok(Self {
@@ -185,7 +185,7 @@ impl UltraLogLog {
     /// Returns a downsized copy of this sketch with a precision that is not larger than the given
     /// precision parameter.
     pub fn downsize(&self, p: u32) -> Result<Self, &'static str> {
-        if p < MIN_P || p > MAX_P {
+        if !(MIN_P..=MAX_P).contains(&p) {
             return Err("Invalid precision parameter");
         }
         if (1 << p) >= self.state.len() {
@@ -203,33 +203,38 @@ impl UltraLogLog {
     /// of this sketch. Otherwise, an error will be returned.
     pub fn add_sketch(&mut self, other: &UltraLogLog) -> Result<&mut Self, &'static str> {
         let other_data = &other.state;
-        if other_data.len() < self.state.len() {
-            return Err("other has smaller precision");
-        } else if other_data.len() == self.state.len() {
-            for i in 0..self.state.len() {
-                let other_r = other_data[i];
-                if other_r != 0 {
-                    self.state[i] = Self::pack(Self::unpack(self.state[i]) | Self::unpack(other_r));
+        match other_data.len().cmp(&self.state.len()) {
+            std::cmp::Ordering::Less => {
+                return Err("other has smaller precision");
+            }
+            std::cmp::Ordering::Equal => {
+                for i in 0..self.state.len() {
+                    let other_r = other_data[i];
+                    if other_r != 0 {
+                        self.state[i] =
+                            Self::pack(Self::unpack(self.state[i]) | Self::unpack(other_r));
+                    }
                 }
             }
-        } else {
-            let p = self.get_p();
-            let other_p = other.get_p();
-            let other_p_minus_one = other_p - 1;
-            let k_upper_bound = 1u64 << (other_p - p);
-            let mut j = 0;
-            for i in 0..self.state.len() {
-                let mut hash_prefix = Self::unpack(self.state[i]) | Self::unpack(other_data[j]);
-                j += 1;
-                for k in 1..k_upper_bound {
-                    if other_data[j] != 0 {
-                        hash_prefix |=
-                            1u64 << (k.leading_zeros() as i32 + other_p_minus_one as i32) as u32;
-                    }
+            std::cmp::Ordering::Greater => {
+                let p = self.get_p();
+                let other_p = other.get_p();
+                let other_p_minus_one = other_p - 1;
+                let k_upper_bound = 1u64 << (other_p - p);
+                let mut j = 0;
+                for i in 0..self.state.len() {
+                    let mut hash_prefix = Self::unpack(self.state[i]) | Self::unpack(other_data[j]);
                     j += 1;
-                }
-                if hash_prefix != 0 {
-                    self.state[i] = Self::pack(hash_prefix);
+                    for k in 1..k_upper_bound {
+                        if other_data[j] != 0 {
+                            hash_prefix |= 1u64
+                                << (k.leading_zeros() as i32 + other_p_minus_one as i32) as u32;
+                        }
+                        j += 1;
+                    }
+                    if hash_prefix != 0 {
+                        self.state[i] = Self::pack(hash_prefix);
+                    }
                 }
             }
         }
