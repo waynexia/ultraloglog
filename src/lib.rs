@@ -38,12 +38,16 @@ const INV_SQRT_FISHER_INFORMATION: f64 = 0.7608621002725182;
 const ML_EQUATION_SOLVER_EPS: f64 = 0.001 * INV_SQRT_FISHER_INFORMATION;
 const ML_BIAS_CORRECTION_CONSTANT: f64 = 0.48147376527720065;
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 /// A trait for observing state changes in the UltraLogLog sketch
 pub trait StateChangeObserver {
     fn state_changed(&mut self, probability_decrement: f64);
 }
 
 /// UltraLogLog is a sketch for approximate distinct counting that is more space efficient than HyperLogLog
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct UltraLogLog {
     state: Vec<u8>,
 }
