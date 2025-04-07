@@ -1,6 +1,6 @@
 // This implementation is based on the Java version
 // https://github.com/dynatrace-oss/hash4j/
-
+// and the paper "UltraLogLog: A Space-Efficient Probabilistic Data Structure for Distinct Counting"    
 // Constants for UltraLogLog implementation
 const MIN_P: u32 = 3;
 const MAX_P: u32 = 26; // 32 - 6 (same as Java implementation)
@@ -273,6 +273,40 @@ impl UltraLogLog {
     /// Returns a reference to the internal state of this sketch.
     pub fn get_state(&self) -> &[u8] {
         &self.state
+    }
+    /// Serializes this UltraLogLog to a file using bincode
+    /// the serde feature must be enabled
+    pub fn save(&self, path: &str) -> std::io::Result<()> {
+        // Convert the sketch to a bincode-encoded Vec<u8>
+        let encoded: Vec<u8> = bincode::serialize(&self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+        // Write bytes to disk
+        std::fs::write(path, &encoded)
+    }
+
+    /// Loads an UltraLogLog from a bincode file
+    /// the serde feature must be enabled
+    pub fn load(path: &str) -> std::io::Result<Self> {
+        // Read raw bytes from disk
+        let bytes = std::fs::read(path)?;
+
+        // Decode them as UltraLogLog
+        let sketch: UltraLogLog = bincode::deserialize(&bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+        // Validate that the state length is within expected limits
+        if sketch.state.len() < (1 << crate::MIN_P) 
+            || sketch.state.len() > (1 << crate::MAX_P)
+            || !sketch.state.len().is_power_of_two() 
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid UltraLogLog state length!",
+            ));
+        }
+
+        Ok(sketch)
     }
 }
 
@@ -898,5 +932,42 @@ mod tests {
             original.get_distinct_count_estimate(),
             wrapped.get_distinct_count_estimate()
         );
+    }
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_save_and_load() {
+        use std::fs;
+    
+        // Create a new UltraLogLog with p=5
+        let mut ull = UltraLogLog::new(5).expect("Failed to create ULL");
+        
+        // Add some data
+        ull.add(123456789);
+        ull.add(987654321);
+        
+        // Check the estimate before saving
+        let original_estimate = ull.get_distinct_count_estimate();
+        assert!(original_estimate > 0.0);
+    
+        // Pick a file name for our test
+        let file_path = "test_ultraloglog.bin";
+    
+        // Save it
+        ull.save(file_path).expect("Failed to save UltraLogLog");
+    
+        // Load it
+        let loaded_ull = UltraLogLog::load(file_path).expect("Failed to load UltraLogLog");
+    
+        // Confirm the loaded version has the same estimate
+        let loaded_estimate = loaded_ull.get_distinct_count_estimate();
+        assert!(
+            (loaded_estimate - original_estimate).abs() < f64::EPSILON,
+            "Loaded estimate ({}) differs from original ({})",
+            loaded_estimate,
+            original_estimate
+        );
+    
+        // Optionally, remove the file to clean up
+        fs::remove_file(file_path).ok();
     }
 }
