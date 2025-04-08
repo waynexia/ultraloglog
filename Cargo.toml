@@ -12,10 +12,9 @@ categories = ["data-structures", "algorithms"]
 
 [features]
 default = []
-serde = ["dep:serde"]
-
+serde = ["dep:serde", "dep:bincode"]
 [dependencies]
-bincode = { version = "1.3"}
+bincode = { version = "1.3", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
