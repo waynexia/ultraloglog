@@ -277,36 +277,27 @@ impl UltraLogLog {
     }
     /// Serializes UltraLogLog to a file using bincode
     /// the serde feature must be enabled
-    pub fn save(&self, path: &str) -> std::io::Result<()> {
-        // Convert the sketch to a bincode-encoded Vec<u8>
-        let encoded: Vec<u8> = bincode::serialize(&self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-
-        // Write bytes to disk
-        std::fs::write(path, &encoded)
+    pub fn save<W: std::io::Write>(&self, mut writer: W) -> std::io::Result<()> {
+        bincode::serialize_into(&mut writer, &self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }
 
     /// Loads an UltraLogLog from a bincode file
     /// the serde feature must be enabled
-    pub fn load(path: &str) -> std::io::Result<Self> {
-        // Read raw bytes from disk
-        let bytes = std::fs::read(path)?;
-
-        // Decode them as UltraLogLog
-        let sketch: UltraLogLog = bincode::deserialize(&bytes)
+    pub fn load<R: std::io::Read>(mut reader: R) -> std::io::Result<Self> {
+        let sketch: UltraLogLog = bincode::deserialize_from(&mut reader)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-
-        // Validate that the state length is within expected limits
-        if sketch.state.len() < (1 << crate::MIN_P) 
+    
+        if sketch.state.len() < (1 << crate::MIN_P)
             || sketch.state.len() > (1 << crate::MAX_P)
-            || !sketch.state.len().is_power_of_two() 
+            || !sketch.state.len().is_power_of_two()
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Invalid UltraLogLog state length!",
             ));
         }
-
+    
         Ok(sketch)
     }
 }
@@ -937,29 +928,28 @@ mod tests {
     #[cfg(feature = "serde")]
     #[test]
     fn test_save_and_load() {
-        use std::fs;
+        use std::fs::{File, remove_file};
+        use std::io::{BufWriter, BufReader};
     
-        // Create a new UltraLogLog with p=5
+        let file_path = "test_ultraloglog.bin";
+    
+        // Create UltraLogLog and add data
         let mut ull = UltraLogLog::new(5).expect("Failed to create ULL");
-        
-        // Add some data
         ull.add(123456789);
         ull.add(987654321);
-        
-        // Check the estimate before saving
         let original_estimate = ull.get_distinct_count_estimate();
         assert!(original_estimate > 0.0);
     
-        // Pick a file name for our test
-        let file_path = "test_ultraloglog.bin";
+        // Save to file using writer
+        let file = File::create(file_path).expect("Failed to create file");
+        let writer = BufWriter::new(file);
+        ull.save(writer).expect("Failed to save UltraLogLog");
     
-        // Save it
-        ull.save(file_path).expect("Failed to save UltraLogLog");
+        // Load from file using reader
+        let file = File::open(file_path).expect("Failed to open file");
+        let reader = BufReader::new(file);
+        let loaded_ull = UltraLogLog::load(reader).expect("Failed to load UltraLogLog");
     
-        // Load it
-        let loaded_ull = UltraLogLog::load(file_path).expect("Failed to load UltraLogLog");
-    
-        // Confirm the loaded version has the same estimate
         let loaded_estimate = loaded_ull.get_distinct_count_estimate();
         assert!(
             (loaded_estimate - original_estimate).abs() < f64::EPSILON,
@@ -968,7 +958,7 @@ mod tests {
             original_estimate
         );
     
-        // Optionally, remove the file to clean up
-        fs::remove_file(file_path).ok();
+        // Cleanup
+        remove_file(file_path).ok();
     }
 }
