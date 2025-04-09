@@ -7,4 +7,4 @@ edition = "2021"
 ultraloglog = { path = ".." }
 rand = "0.8"
 clap = "3.0.0-beta.1"
-rayon = "1.1" 
+rayon = "1.1"

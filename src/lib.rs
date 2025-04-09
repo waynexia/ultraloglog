@@ -1,5 +1,6 @@
 // This implementation is based on the Java version
 // https://github.com/dynatrace-oss/hash4j/
+// See the paper "UltraLogLog: A Practical and More Space-Efficient Alternative to HyperLogLog for Approximate Distinct Counting"
 
 // Constants for UltraLogLog implementation
 const MIN_P: u32 = 3;
@@ -273,6 +274,31 @@ impl UltraLogLog {
     /// Returns a reference to the internal state of this sketch.
     pub fn get_state(&self) -> &[u8] {
         &self.state
+    }
+    /// Serializes UltraLogLog to a file using bincode
+    /// the serde feature must be enabled
+    pub fn save<W: std::io::Write>(&self, mut writer: W) -> std::io::Result<()> {
+        bincode::serialize_into(&mut writer, &self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    }
+
+    /// Loads an UltraLogLog from a bincode file
+    /// the serde feature must be enabled
+    pub fn load<R: std::io::Read>(mut reader: R) -> std::io::Result<Self> {
+        let sketch: UltraLogLog = bincode::deserialize_from(&mut reader)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    
+        if sketch.state.len() < (1 << crate::MIN_P)
+            || sketch.state.len() > (1 << crate::MAX_P)
+            || !sketch.state.len().is_power_of_two()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid UltraLogLog state length!",
+            ));
+        }
+    
+        Ok(sketch)
     }
 }
 
@@ -898,5 +924,41 @@ mod tests {
             original.get_distinct_count_estimate(),
             wrapped.get_distinct_count_estimate()
         );
+    }
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_save_and_load() {
+        use std::fs::{File, remove_file};
+        use std::io::{BufWriter, BufReader};
+    
+        let file_path = "test_ultraloglog.bin";
+    
+        // Create UltraLogLog and add data
+        let mut ull = UltraLogLog::new(5).expect("Failed to create ULL");
+        ull.add(123456789);
+        ull.add(987654321);
+        let original_estimate = ull.get_distinct_count_estimate();
+        assert!(original_estimate > 0.0);
+    
+        // Save to file using writer
+        let file = File::create(file_path).expect("Failed to create file");
+        let writer = BufWriter::new(file);
+        ull.save(writer).expect("Failed to save UltraLogLog");
+    
+        // Load from file using reader
+        let file = File::open(file_path).expect("Failed to open file");
+        let reader = BufReader::new(file);
+        let loaded_ull = UltraLogLog::load(reader).expect("Failed to load UltraLogLog");
+    
+        let loaded_estimate = loaded_ull.get_distinct_count_estimate();
+        assert!(
+            (loaded_estimate - original_estimate).abs() < f64::EPSILON,
+            "Loaded estimate ({}) differs from original ({})",
+            loaded_estimate,
+            original_estimate
+        );
+    
+        // Cleanup
+        remove_file(file_path).ok();
     }
 }
