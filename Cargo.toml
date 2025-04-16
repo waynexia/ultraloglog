@@ -16,7 +16,7 @@ serde = ["dep:serde", "dep:bincode"]
 [dependencies]
 bincode = { version = "1.3", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
-
+xxhash-rust = { version = "0.8", default-features = false, features = ["xxh3"] }
 [dev-dependencies]
 criterion = "0.5"
 rand = "0.8"

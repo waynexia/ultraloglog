@@ -41,6 +41,7 @@ const ML_BIAS_CORRECTION_CONSTANT: f64 = 0.48147376527720065;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+use xxhash_rust::xxh3::xxh3_64;
 
 /// A trait for observing state changes in the UltraLogLog sketch
 pub trait StateChangeObserver {
@@ -104,10 +105,21 @@ impl UltraLogLog {
         ((((reg & 2) | ((reg & 1) << 2)) ^ 7u8) as u64) << (63 - k) >> p
     }
 
+    /// Hashes a byte slice with xxh3_64 and adds it to the sketch.
+    pub fn add_bytes(&mut self, bytes: impl AsRef<[u8]>) -> &mut Self {
+        let hash = xxh3_64(bytes.as_ref());
+        self.add(hash)
+    }
+
+    /// Convenience for &str (delegates to `add_bytes`).
+    pub fn add_str(&mut self, s: &str) -> &mut Self {
+        self.add_bytes(s.as_bytes())
+    }
     /// Adds a new element represented by a 64-bit hash value to this sketch.
     ///
     /// In order to get good estimates, it is important that the hash value is calculated using a
     /// high-quality hash algorithm.
+    
     pub fn add(&mut self, hash_value: u64) -> &mut Self {
         struct NoopObserver;
         impl StateChangeObserver for NoopObserver {
@@ -128,7 +140,10 @@ impl UltraLogLog {
 
         let old_state = self.state[idx];
         let mut hash_prefix = Self::unpack(old_state);
-        hash_prefix |= 1u64 << (nlz + (64 - q)); // (nlz + (64-q)) = (nlz + p) in {p, ... 63}
+        // This shift left is not working in Rust, but works in Java
+        //hash_prefix |= 1u64 << (nlz + (64 - q)); // (nlz + (64-q)) = (nlz + p) in {p, ... 63}
+        let exp = (nlz + (64 - q)) as u32;          // exp is 0‑64
+        hash_prefix |= 1u64.wrapping_shl(exp & 63); // shift modulo 64
         let new_state = Self::pack(hash_prefix);
 
         if let Some(obs) = observer {
@@ -963,5 +978,25 @@ mod tests {
 
         // Cleanup
         remove_file(file_path).ok();
+    }
+    #[test]
+    fn test_add_strings() {
+        // p = 10  ⇒  1 024 registers – plenty of head‑room for just 3 items
+        let mut ull = UltraLogLog::new(5).expect("Failed to create ULL");
+
+        // Ingest three unique strings via the xxh3‑powered helper
+        ull.add_str("apple")
+        .add_str("banana")
+        .add_str("cherry");
+
+        let estimate = ull.get_distinct_count_estimate();
+
+        // UltraLogLog should be almost exact at such a tiny cardinality.
+        // Allow a ±0.5 margin to avoid flaky CI failures in extreme hash‑collision cases.
+        assert!(
+            (estimate - 3.0).abs() < 0.1,
+            "estimate {:.3} deviates too much from true count 3",
+            estimate
+        );
     }
 }
