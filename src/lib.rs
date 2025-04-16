@@ -992,7 +992,7 @@ mod tests {
         let estimate = ull.get_distinct_count_estimate();
 
         // UltraLogLog should be almost exact at such a tiny cardinality.
-        // Allow a ±0.5 margin to avoid flaky CI failures in extreme hash‑collision cases.
+        // Allow a ±0.1 margin to avoid flaky CI failures in extreme hash‑collision cases.
         assert!(
             (estimate - 3.0).abs() < 0.1,
             "estimate {:.3} deviates too much from true count 3",
