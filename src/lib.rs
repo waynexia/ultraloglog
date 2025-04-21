@@ -178,8 +178,6 @@ impl UltraLogLog {
 
         let old_state = self.state[idx];
         let mut hash_prefix = Self::unpack(old_state);
-        // This shift left is not working in Rust, but works in Java
-        //hash_prefix |= 1u64 << (nlz + (64 - q)); // (nlz + (64-q)) = (nlz + p) in {p, ... 63}
         let exp = (nlz + (64 - q)) as u32; // exp is 0‑64
         hash_prefix |= 1u64.wrapping_shl(exp & 63); // shift modulo 64
         let new_state = Self::pack(hash_prefix);
