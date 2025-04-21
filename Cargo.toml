@@ -20,6 +20,7 @@ xxhash-rust = { version = "0.8", default-features = false, features = ["xxh3"] }
 [dev-dependencies]
 criterion = "0.5"
 rand = "0.8"
+ahash = "0.8"
 
 [[bench]]
 name = "ultraloglog"
