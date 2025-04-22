@@ -41,6 +41,8 @@ const ML_BIAS_CORRECTION_CONSTANT: f64 = 0.48147376527720065;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+use std::hash::{BuildHasher, Hash, Hasher};
+use xxhash_rust::xxh3::Xxh3;
 
 /// A trait for observing state changes in the UltraLogLog sketch
 pub trait StateChangeObserver {
@@ -104,6 +106,54 @@ impl UltraLogLog {
         ((((reg & 2) | ((reg & 1) << 2)) ^ 7u8) as u64) << (63 - k) >> p
     }
 
+    pub fn add_value_with_build_hasher<T, S>(&mut self, value: T, build: &S) -> &mut Self
+    where
+        T: Hash,
+        S: BuildHasher + ?Sized,
+    {
+        // one fresh hasher per call
+        let mut h = build.build_hasher();
+        value.hash(&mut h);
+        // 64‑bit digest
+        let hash = h.finish();
+        self.add(hash)
+    }
+
+    /// If `build_hasher` is `None` the method falls back to xxh3‑64 hash function.
+    pub fn add_value_with<T, S>(&mut self, value: T, build_hasher: Option<&S>) -> &mut Self
+    where
+        T: Hash,
+        S: BuildHasher + ?Sized,
+    {
+        match build_hasher {
+            Some(b) => self.add_value_with_build_hasher(value, b),
+            None => self.add_value(value),
+        }
+    }
+
+    pub fn add_value<T: Hash>(&mut self, value: T) -> &mut Self {
+        // 64‑bit xxh3 hash
+        let mut h = Xxh3::default();
+        value.hash(&mut h);
+        let hash = h.finish();
+        self.add(hash)
+    }
+    /// Same as [`Self::add_value`] but notifies a `StateChangeObserver`.
+    pub fn add_value_with_observer<T, O>(
+        &mut self,
+        value: T,
+        mut observer: Option<&mut O>,
+    ) -> &mut Self
+    where
+        T: Hash,
+        O: StateChangeObserver,
+    {
+        let mut h = Xxh3::default();
+        value.hash(&mut h);
+        let hash = h.finish();
+        self.add_with_observer(hash, observer.take())
+    }
+
     /// Adds a new element represented by a 64-bit hash value to this sketch.
     ///
     /// In order to get good estimates, it is important that the hash value is calculated using a
@@ -128,7 +178,8 @@ impl UltraLogLog {
 
         let old_state = self.state[idx];
         let mut hash_prefix = Self::unpack(old_state);
-        hash_prefix |= 1u64 << (nlz + (64 - q)); // (nlz + (64-q)) = (nlz + p) in {p, ... 63}
+        let exp = (nlz + (64 - q)) as u32; // exp is 0‑64
+        hash_prefix |= 1u64.wrapping_shl(exp & 63); // shift modulo 64
         let new_state = Self::pack(hash_prefix);
 
         if let Some(obs) = observer {
@@ -870,6 +921,7 @@ fn solve_maximum_likelihood_equation(a: f64, b: &[i32], max_k: i32, eps: f64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ahash::RandomState;
 
     #[test]
     fn test_create_ultraloglog() {
@@ -963,5 +1015,38 @@ mod tests {
 
         // Cleanup
         remove_file(file_path).ok();
+    }
+    #[test]
+    fn test_xxhash3() {
+        let mut ull = UltraLogLog::new(6).unwrap();
+
+        ull.add_value("apple")
+            .add_value("banana")
+            .add_value("cherry")
+            .add_value("033");
+
+        let est = ull.get_distinct_count_estimate();
+        assert!(
+            (est - 4.0).abs() < 0.1,
+            "estimate {:.3} deviates from true count 3",
+            est
+        );
+    }
+    #[test]
+    fn test_custom_ahash_hasher() {
+        let ahash = RandomState::with_seeds(1, 2, 3, 4);
+
+        let mut ull = UltraLogLog::new(6).unwrap();
+
+        ull.add_value_with_build_hasher("apple", &ahash)
+            .add_value_with_build_hasher("banana", &ahash)
+            .add_value_with_build_hasher("cherry", &ahash);
+
+        let est = ull.get_distinct_count_estimate();
+        assert!(
+            (est - 3.0).abs() < 0.1,
+            "estimate {:.3} deviates from true count 3",
+            est
+        );
     }
 }
