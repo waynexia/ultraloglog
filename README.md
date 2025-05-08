@@ -1,6 +1,6 @@
 # UltraLogLog
 
-Rust implementation of the [UltraLogLog algorithm](https://arxiv.org/pdf/2308.16862). Ultraloglog is more space efficient than the widely used HyperLogLog, but can be slower. FGRA estimator and MLE estimator can be used. 
+Rust implementation of the [UltraLogLog algorithm](https://arxiv.org/pdf/2308.16862). Ultraloglog is more space efficient than the widely used HyperLogLog, but can be slower. FGRA estimator or MLE estimator can be used. 
 
 ## Usage
 
