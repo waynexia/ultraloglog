@@ -923,6 +923,7 @@ mod tests {
     use super::*;
     use ahash::RandomState;
 
+
     #[test]
     fn test_create_ultraloglog() {
         assert!(UltraLogLog::new(2).is_err()); // Too small p
@@ -1018,7 +1019,7 @@ mod tests {
     }
     #[test]
     fn test_xxhash3() {
-        let mut ull = UltraLogLog::new(6).unwrap();
+        let mut ull = UltraLogLog::new(8).unwrap();
 
         ull.add_value("apple")
             .add_value("banana")
@@ -1036,7 +1037,7 @@ mod tests {
     fn test_custom_ahash_hasher() {
         let ahash = RandomState::with_seeds(1, 2, 3, 4);
 
-        let mut ull = UltraLogLog::new(6).unwrap();
+        let mut ull = UltraLogLog::new(8).unwrap();
 
         ull.add_value_with_build_hasher("apple", &ahash)
             .add_value_with_build_hasher("banana", &ahash)
@@ -1046,6 +1047,87 @@ mod tests {
         assert!(
             (est - 3.0).abs() < 0.1,
             "estimate {:.3} deviates from true count 3",
+            est
+        );
+    }
+    #[test]
+    fn test_custom_komihash_hasher() {
+        use std::hash::BuildHasher;
+        // Komihash v5 one-shot hasher
+        use komihash::v5::KomiHasher;
+
+        /// Simple BuildHasher that spawns a fresh Komihash with a fixed seed
+        #[derive(Clone)]
+        struct KomiBuildHasher {
+            seed: u64,
+        }
+        impl BuildHasher for KomiBuildHasher {
+            type Hasher = KomiHasher;
+            #[inline]
+            fn build_hasher(&self) -> Self::Hasher {
+                KomiHasher::new(self.seed)
+            }
+        }
+
+        //use deterministic seed
+        let komi_builder = KomiBuildHasher { seed: 0x1234_5678_9abc_def0 };
+
+        let mut ull = UltraLogLog::new(8).unwrap();
+
+        // feed four distinct strings through the Komihash builder
+        ull.add_value_with_build_hasher("apple",  &komi_builder)
+            .add_value_with_build_hasher("banana", &komi_builder)
+            .add_value_with_build_hasher("cherry", &komi_builder)
+            .add_value_with_build_hasher("dragonfruit",   &komi_builder);
+
+        let est = ull.get_distinct_count_estimate();
+        assert!(
+            (est - 4.0).abs() < 0.1,          // tolerate ≈5 % relative error at p = 6
+            "estimate {:.3} deviates from true count 4",
+            est
+        );
+    }
+    #[test]
+    fn test_custom_hasher_polymurhash() {
+        use std::hash::BuildHasherDefault;
+        use polymur_hash::PolymurHasher;
+
+        // BuildHasherDefault turns our one-shot PolymurHasher into a BuildHasher
+        type PolymurBuild = BuildHasherDefault<PolymurHasher>;
+        let polymur_builder = PolymurBuild::default(); 
+
+        let mut ull = UltraLogLog::new(8).unwrap();
+
+        ull.add_value_with_build_hasher("apple", &polymur_builder)
+            .add_value_with_build_hasher("banana", &polymur_builder)
+            .add_value_with_build_hasher("cherry", &polymur_builder)
+            .add_value_with_build_hasher("dragonfruit", &polymur_builder);
+
+        let est = ull.get_distinct_count_estimate();
+        assert!(
+            (est - 4.0).abs() < 0.1,
+            "estimate {:.3} deviates from true count 4",
+            est
+        );
+    }
+    #[test]
+    fn test_custom_hasher_wyhash() {
+        // The default builder already gives us seed = 0 and the stock 256-bit secret.
+        use wyhash::WyHasherBuilder;
+
+        let wyhash_builder = WyHasherBuilder::default();
+
+        let mut ull = UltraLogLog::new(8).unwrap();
+
+        ull.add_value_with_build_hasher("apple", &wyhash_builder)
+            .add_value_with_build_hasher("banana", &wyhash_builder)
+            .add_value_with_build_hasher("cherry", &wyhash_builder)
+            .add_value_with_build_hasher("dragonfruit", &wyhash_builder);
+
+        let est = ull.get_distinct_count_estimate();
+        assert!(
+            (est - 4.0).abs() < 0.1,
+            "wyhash estimate {:.3} deviates too much from true count 4",
             est
         );
     }
