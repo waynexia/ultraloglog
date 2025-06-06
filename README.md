@@ -42,5 +42,8 @@ let loaded_ull = UltraLogLog::load(reader).expect("Failed to load UltraLogLog");
 let loaded_estimate = loaded_ull.get_distinct_count_estimate();
 ```
 
+## 64-bit hash function
+As mentioned in the paper, high quality 64-bit hash function is key to ultraloglog algorithm. We tested several modern 64-bit hash libraries and found that xxhash-rust (default) and wyhash-rs worked well. However, users can easily replace the default xxhash-rust with polymurhash, komihash, ahash and t1ha et.al. See testing section for details. 
+
 ## Reference
 Ertl, O., 2024. UltraLogLog: A Practical and More Space-Efficient Alternative to HyperLogLog for Approximate Distinct Counting. Proceedings of the VLDB Endowment, 17(7), pp.1655-1668.
