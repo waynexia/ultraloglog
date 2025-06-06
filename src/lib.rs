@@ -1131,4 +1131,86 @@ mod tests {
             est
         );
     }
+    #[test]
+    fn test_custom_hasher_t1ha2_atonce() {
+        use std::hash::{BuildHasher, Hasher};
+        use t1ha;
+        use t1ha::t1ha2_atonce;
+        // ── Hasher wrapper ────────────────────────────────────────────────────────
+        #[derive(Default)]
+        struct T1ha2AtonceHasher {
+            seed: u64,
+            buf:  Vec<u8>,
+        }
+
+        impl Hasher for T1ha2AtonceHasher {
+            fn write(&mut self, bytes: &[u8]) { self.buf.extend_from_slice(bytes); }
+            fn finish(&self) -> u64          { t1ha2_atonce(&self.buf, self.seed) }
+        }
+
+        #[derive(Clone, Default)]
+        struct T1ha2AtonceBuild;
+        impl BuildHasher for T1ha2AtonceBuild {
+            type Hasher = T1ha2AtonceHasher;
+            fn build_hasher(&self) -> Self::Hasher { T1ha2AtonceHasher::default() }
+        }
+
+        let builder = T1ha2AtonceBuild::default();
+        let mut ull  = UltraLogLog::new(8).unwrap();
+
+        ull.add_value_with_build_hasher("alpha", &builder)
+        .add_value_with_build_hasher("beta", &builder)
+        .add_value_with_build_hasher("gamma", &builder)
+        .add_value_with_build_hasher("delta", &builder);
+
+        let est = ull.get_distinct_count_estimate();
+        assert!(
+            (est - 4.0).abs() < 0.1,
+            "t1ha2-atonce estimate {:.3} deviates too much from 4",
+            est
+        );
+    }
+    // run test like this: RUSTFLAGS="-C target-cpu=native" cargo test test_custom_hasher_t1ha0_avx2 -- --nocapture
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+    #[test]
+    fn test_custom_hasher_t1ha0_avx2() {
+        use std::hash::{BuildHasher, Hasher};
+        use t1ha;
+        use t1ha::t1ha0_ia32aes_avx2;
+
+        // ── Hasher wrapper ────────────────────────────────────────────────────────
+        #[derive(Default)]
+        struct T1ha0Avx2Hasher {
+            seed: u64,
+            buf:  Vec<u8>,
+        }
+
+        impl Hasher for T1ha0Avx2Hasher {
+            fn write(&mut self, bytes: &[u8]) { self.buf.extend_from_slice(bytes); }
+            fn finish(&self) -> u64          { t1ha0_ia32aes_avx2(&self.buf, self.seed) }
+        }
+
+        #[derive(Clone, Default)]
+        struct T1ha0Avx2Build;
+        impl BuildHasher for T1ha0Avx2Build {
+            type Hasher = T1ha0Avx2Hasher;
+            fn build_hasher(&self) -> Self::Hasher { T1ha0Avx2Hasher::default() }
+        }
+
+        // ── Sketch four keys and check the estimate ───────────────────────────────
+        let builder = T1ha0Avx2Build::default();
+        let mut ull  = UltraLogLog::new(8).unwrap();
+
+        ull.add_value_with_build_hasher("apple",        &builder)
+        .add_value_with_build_hasher("banana",       &builder)
+        .add_value_with_build_hasher("cherry",       &builder)
+        .add_value_with_build_hasher("dragonfruit",  &builder);
+
+        let est = ull.get_distinct_count_estimate();
+        assert!(
+            (est - 4.0).abs() < 0.1,
+            "t1ha0-avx2 estimate {:.3} deviates too much from 4",
+            est
+        );
+    }
 }

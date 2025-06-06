@@ -24,6 +24,7 @@ ahash = "0.8"
 komihash = "0.4.1"
 polymur-hash = "0.2.2"
 wyhash = "0.6.0"
+t1ha = "0.1.2"
 [[bench]]
 name = "ultraloglog"
 harness = false
