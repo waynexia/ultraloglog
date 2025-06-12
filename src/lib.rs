@@ -1018,7 +1018,7 @@ mod tests {
     }
     #[test]
     fn test_xxhash3() {
-        let mut ull = UltraLogLog::new(6).unwrap();
+        let mut ull = UltraLogLog::new(8).unwrap();
 
         ull.add_value("apple")
             .add_value("banana")
@@ -1036,7 +1036,7 @@ mod tests {
     fn test_custom_ahash_hasher() {
         let ahash = RandomState::with_seeds(1, 2, 3, 4);
 
-        let mut ull = UltraLogLog::new(6).unwrap();
+        let mut ull = UltraLogLog::new(8).unwrap();
 
         ull.add_value_with_build_hasher("apple", &ahash)
             .add_value_with_build_hasher("banana", &ahash)
@@ -1046,6 +1046,186 @@ mod tests {
         assert!(
             (est - 3.0).abs() < 0.1,
             "estimate {:.3} deviates from true count 3",
+            est
+        );
+    }
+    #[test]
+    fn test_custom_komihash_hasher() {
+        use std::hash::BuildHasher;
+        // Komihash v5 one-shot hasher
+        use komihash::v5::KomiHasher;
+
+        /// Simple BuildHasher that spawns a fresh Komihash with a fixed seed
+        #[derive(Clone)]
+        struct KomiBuildHasher {
+            seed: u64,
+        }
+        impl BuildHasher for KomiBuildHasher {
+            type Hasher = KomiHasher;
+            #[inline]
+            fn build_hasher(&self) -> Self::Hasher {
+                KomiHasher::new(self.seed)
+            }
+        }
+
+        // use deterministic seed
+        let komi_builder = KomiBuildHasher {
+            seed: 0x1234_5678_9abc_def0,
+        };
+
+        let mut ull = UltraLogLog::new(8).unwrap();
+
+        // feed four distinct strings through the Komihash builder
+        ull.add_value_with_build_hasher("apple", &komi_builder)
+            .add_value_with_build_hasher("banana", &komi_builder)
+            .add_value_with_build_hasher("cherry", &komi_builder)
+            .add_value_with_build_hasher("dragonfruit", &komi_builder);
+
+        let est = ull.get_distinct_count_estimate();
+        assert!(
+            (est - 4.0).abs() < 0.1, // tolerate ≈5 % relative error at p = 6
+            "estimate {:.3} deviates from true count 4",
+            est
+        );
+    }
+    #[test]
+    fn test_custom_hasher_polymurhash() {
+        use polymur_hash::PolymurHasher;
+        use std::hash::BuildHasherDefault;
+
+        // BuildHasherDefault turns our one-shot PolymurHasher into a BuildHasher
+        type PolymurBuild = BuildHasherDefault<PolymurHasher>;
+        let polymur_builder = PolymurBuild::default();
+
+        let mut ull = UltraLogLog::new(8).unwrap();
+
+        ull.add_value_with_build_hasher("apple", &polymur_builder)
+            .add_value_with_build_hasher("banana", &polymur_builder)
+            .add_value_with_build_hasher("cherry", &polymur_builder)
+            .add_value_with_build_hasher("dragonfruit", &polymur_builder);
+
+        let est = ull.get_distinct_count_estimate();
+        assert!(
+            (est - 4.0).abs() < 0.1,
+            "estimate {:.3} deviates from true count 4",
+            est
+        );
+    }
+    #[test]
+    fn test_custom_hasher_wyhash() {
+        // The default builder already gives us seed = 0 and the stock 256-bit secret.
+        use wyhash::WyHasherBuilder;
+
+        let wyhash_builder = WyHasherBuilder::default();
+
+        let mut ull = UltraLogLog::new(8).unwrap();
+
+        ull.add_value_with_build_hasher("apple", &wyhash_builder)
+            .add_value_with_build_hasher("banana", &wyhash_builder)
+            .add_value_with_build_hasher("cherry", &wyhash_builder)
+            .add_value_with_build_hasher("dragonfruit", &wyhash_builder);
+
+        let est = ull.get_distinct_count_estimate();
+        assert!(
+            (est - 4.0).abs() < 0.1,
+            "wyhash estimate {:.3} deviates too much from true count 4",
+            est
+        );
+    }
+    #[test]
+    fn test_custom_hasher_t1ha2_atonce() {
+        use std::hash::{BuildHasher, Hasher};
+        use t1ha;
+        use t1ha::t1ha2_atonce;
+        // ── Hasher wrapper ────────────────────────────────────────────────────────
+        #[derive(Default)]
+        struct T1ha2AtonceHasher {
+            seed: u64,
+            buf: Vec<u8>,
+        }
+
+        impl Hasher for T1ha2AtonceHasher {
+            fn write(&mut self, bytes: &[u8]) {
+                self.buf.extend_from_slice(bytes);
+            }
+            fn finish(&self) -> u64 {
+                t1ha2_atonce(&self.buf, self.seed)
+            }
+        }
+
+        #[derive(Clone, Default)]
+        struct T1ha2AtonceBuild;
+        impl BuildHasher for T1ha2AtonceBuild {
+            type Hasher = T1ha2AtonceHasher;
+            fn build_hasher(&self) -> Self::Hasher {
+                T1ha2AtonceHasher::default()
+            }
+        }
+
+        let builder = T1ha2AtonceBuild::default();
+        let mut ull = UltraLogLog::new(8).unwrap();
+
+        ull.add_value_with_build_hasher("alpha", &builder)
+            .add_value_with_build_hasher("beta", &builder)
+            .add_value_with_build_hasher("gamma", &builder)
+            .add_value_with_build_hasher("delta", &builder);
+
+        let est = ull.get_distinct_count_estimate();
+        assert!(
+            (est - 4.0).abs() < 0.1,
+            "t1ha2-atonce estimate {:.3} deviates too much from 4",
+            est
+        );
+    }
+    // run test like this: RUSTFLAGS="-C target-cpu=native" cargo test test_custom_hasher_t1ha0_avx2 -- --nocapture
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64"),
+        target_feature = "avx2"
+    ))]
+    #[test]
+    fn test_custom_hasher_t1ha0_avx2() {
+        use std::hash::{BuildHasher, Hasher};
+        use t1ha;
+        use t1ha::t1ha0_ia32aes_avx2;
+
+        // ── Hasher wrapper ────────────────────────────────────────────────────────
+        #[derive(Default)]
+        struct T1ha0Avx2Hasher {
+            seed: u64,
+            buf: Vec<u8>,
+        }
+
+        impl Hasher for T1ha0Avx2Hasher {
+            fn write(&mut self, bytes: &[u8]) {
+                self.buf.extend_from_slice(bytes);
+            }
+            fn finish(&self) -> u64 {
+                t1ha0_ia32aes_avx2(&self.buf, self.seed)
+            }
+        }
+
+        #[derive(Clone, Default)]
+        struct T1ha0Avx2Build;
+        impl BuildHasher for T1ha0Avx2Build {
+            type Hasher = T1ha0Avx2Hasher;
+            fn build_hasher(&self) -> Self::Hasher {
+                T1ha0Avx2Hasher::default()
+            }
+        }
+
+        // ── Sketch four keys and check the estimate ───────────────────────────────
+        let builder = T1ha0Avx2Build::default();
+        let mut ull = UltraLogLog::new(8).unwrap();
+
+        ull.add_value_with_build_hasher("apple", &builder)
+            .add_value_with_build_hasher("banana", &builder)
+            .add_value_with_build_hasher("cherry", &builder)
+            .add_value_with_build_hasher("dragonfruit", &builder);
+
+        let est = ull.get_distinct_count_estimate();
+        assert!(
+            (est - 4.0).abs() < 0.1,
+            "t1ha0-avx2 estimate {:.3} deviates too much from 4",
             est
         );
     }
