@@ -1018,7 +1018,6 @@ mod tests {
     }
     #[cfg(feature = "serde")]
     #[test]
-
     fn test_two_sketch_in_one_file() {
         use std::fs::{File, remove_file};
         use std::io::{BufReader, BufWriter};
