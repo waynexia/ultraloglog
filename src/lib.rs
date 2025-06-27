@@ -1016,6 +1016,60 @@ mod tests {
         // Cleanup
         remove_file(file_path).ok();
     }
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_two_sketch_in_one_file() {
+        use std::fs::{File, remove_file};
+        use std::io::{BufReader, BufWriter};
+        use std::io::Write;
+        const P: u32 = 8;                
+        // build set 1 
+        let mut s1 = UltraLogLog::new(P).expect("alloc sketch");
+        for word in ["apple", "banana", "cherry", "dragonfruit"] {
+            s1.add_value(word);
+        }
+        // build set 2
+        let mut s2 = UltraLogLog::new(P).expect("alloc sketch");
+        for word in ["alpha", "beta", "delta"] {
+            s2.add_value(word);
+        }
+
+        // stream-save both sketches into ONE file 
+        let bin_path = "sets_stream.bin";
+        {
+            let f = File::create(bin_path).expect("create file");
+            let mut w = BufWriter::new(f);
+            s1.save(&mut w).expect("save s1");
+            s2.save(&mut w).expect("save s2");
+            w.flush().unwrap();
+        }
+
+        // reopen & stream-load them back 
+        let f = File::open(bin_path).expect("open file");
+        let mut r = BufReader::new(f);
+
+        let s1_loaded = UltraLogLog::load(&mut r).expect("load first sketch");
+        let s2_loaded = UltraLogLog::load(&mut r).expect("load second sketch");
+
+        // verify order + estimates 
+        let est1 = s1_loaded.get_distinct_count_estimate();
+        let est2 = s2_loaded.get_distinct_count_estimate();
+
+        println!("Set 1 (fruit)  estimate ≈ {:.3}", est1);
+        println!("Set 2 (alpha…) estimate ≈ {:.3}", est2);
+
+        assert!(
+            (est1 - 4.0).abs() < 0.1,
+            "set 1 estimate {est1} not close to 4"
+        );
+        assert!(
+            (est2 - 3.0).abs() < 0.1,
+            "set 2 estimate {est2} not close to 3"
+        );
+
+        remove_file(bin_path).ok();
+    }
+
     #[test]
     fn test_xxhash3() {
         let mut ull = UltraLogLog::new(8).unwrap();
