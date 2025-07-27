@@ -42,6 +42,38 @@ let loaded_ull = UltraLogLog::load(reader).expect("Failed to load UltraLogLog");
 let loaded_estimate = loaded_ull.get_distinct_count_estimate();
 ```
 
+## Python Bindings
+This crate also provides Python bindings for the UltraLogLog algorithm using [PyO3](https://pyo3.rs/). See [example.py](./example.py) for usage.
+
+```python
+import ultraloglog
+
+# Create a new UltraLogLog sketch
+ull = ultraloglog.PyUltraLogLog(12)  # precision parameter
+
+# Add values
+ull.add_str("hello")
+ull.add_int(42) 
+ull.add_float(3.14)
+
+# Get estimated count
+print(f"Estimated distinct count: {ull.count()}")
+```
+
+### Installation
+
+#### Using pip
+
+Installation with pip is on the way.
+
+#### From Source
+
+*`uv` is recommended to manage virtual environments.*
+
+1. Install Rust, and maturin `pip install maturin`
+2. Build and install: `maturin develop --release`
+
+
 ## 64-bit hash function
 As mentioned in the paper, high quality 64-bit hash function is key to ultraloglog algorithm. We tested several modern 64-bit hash libraries and found that xxhash-rust (default) and wyhash-rs worked well. However, users can easily replace the default xxhash-rust with polymurhash, komihash, ahash and t1ha et.al. See testing section for details. 
 

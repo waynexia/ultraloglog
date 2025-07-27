@@ -1,0 +1,39 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "ultraloglog"
+description = "Python bindings for UltraLogLog, a space-efficient alternative to HyperLogLog for approximate distinct counting"
+authors = [
+    {name = "Ruihang Xia", email = "waynestxia@gmail.com"},
+    {name = "Jianshu Zhao", email = "jianshuzhao@yahoo.com"}
+]
+license = {text = "Apache-2.0"}
+readme = "README.md"
+keywords = ["ultraloglog", "algorithm", "sketch", "probabilistic", "hyperloglog"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries :: Python Modules"
+]
+requires-python = ">=3.8"
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/waynexia/ultraloglog"
+Repository = "https://github.com/waynexia/ultraloglog"
+Documentation = "https://github.com/waynexia/ultraloglog/blob/master/README.md"
+
+[tool.maturin]
+features = ["python"]
+module-name = "ultraloglog"

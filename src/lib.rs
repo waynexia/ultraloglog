@@ -2,6 +2,11 @@
 // https://github.com/dynatrace-oss/hash4j/
 // See the paper "UltraLogLog: A Practical and More Space-Efficient Alternative to HyperLogLog for Approximate Distinct Counting"
 
+#[cfg(feature = "python")]
+mod python;
+#[cfg(feature = "python")]
+pub use python::*;
+
 // Constants for UltraLogLog implementation
 const MIN_P: u32 = 3;
 const MAX_P: u32 = 26; // 32 - 6 (same as Java implementation)
@@ -1019,11 +1024,11 @@ mod tests {
     #[cfg(feature = "serde")]
     #[test]
     fn test_two_sketch_in_one_file() {
-        use std::fs::{File, remove_file};
-        use std::io::{BufReader, BufWriter};
+        use std::fs::{remove_file, File};
         use std::io::Write;
-        const P: u32 = 8;                
-        // build set 1 
+        use std::io::{BufReader, BufWriter};
+        const P: u32 = 8;
+        // build set 1
         let mut s1 = UltraLogLog::new(P).expect("alloc sketch");
         for word in ["apple", "banana", "cherry", "dragonfruit"] {
             s1.add_value(word);
@@ -1034,7 +1039,7 @@ mod tests {
             s2.add_value(word);
         }
 
-        // stream-save both sketches into ONE file 
+        // stream-save both sketches into ONE file
         let bin_path = "sets_stream.bin";
         {
             let f = File::create(bin_path).expect("create file");
@@ -1044,14 +1049,14 @@ mod tests {
             w.flush().unwrap();
         }
 
-        // reopen & stream-load them back 
+        // reopen & stream-load them back
         let f = File::open(bin_path).expect("open file");
         let mut r = BufReader::new(f);
 
         let s1_loaded = UltraLogLog::load(&mut r).expect("load first sketch");
         let s2_loaded = UltraLogLog::load(&mut r).expect("load second sketch");
 
-        // verify order + estimates 
+        // verify order + estimates
         let est1 = s1_loaded.get_distinct_count_estimate();
         let est2 = s2_loaded.get_distinct_count_estimate();
 
