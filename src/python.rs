@@ -38,10 +38,10 @@ impl PyUltraLogLog {
         self.inner.add_value(value);
     }
 
-    /// Add a float value to the sketch
+    /// Add a float value to the sketch. Note: the float is converted to its raw bit representation before hashing.
     fn add_float(&mut self, value: f64) {
-        // Convert f64 to u64 bits for hashing since f64 doesn't implement Hash
-        self.inner.add_value(value.to_bits());
+        // Convert f64 to a byte array for deterministic hashing
+        self.inner.add_value(value.to_ne_bytes());
     }
 
     /// Get the estimated count of distinct elements
@@ -65,7 +65,7 @@ impl PyUltraLogLog {
     }
 
     /// Create a copy of this sketch
-    fn copy(&self) -> Self {
+    fn __copy__(&self) -> Self {
         PyUltraLogLog {
             inner: self.inner.copy(),
         }
@@ -107,7 +107,11 @@ impl PyUltraLogLog {
 
     /// Length returns the estimated count
     fn __len__(&self) -> usize {
-        self.count() as usize
+        let estimate = self.count().round();
+        if estimate < 0.0 || estimate > usize::MAX as f64 {
+            panic!("Estimate out of bounds for usize: {}", estimate);
+        }
+        estimate as usize
     }
 }
 

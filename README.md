@@ -53,7 +53,7 @@ ull = ultraloglog.PyUltraLogLog(12)  # precision parameter
 
 # Add values
 ull.add_str("hello")
-ull.add_int(42) 
+ull.add_int(42)
 ull.add_float(3.14)
 
 # Get estimated count
