@@ -1,5 +1,9 @@
 # UltraLogLog
 
+[![Crates.io](https://img.shields.io/crates/v/ultraloglog.svg)](https://crates.io/crates/ultraloglog)
+[![PyPI](https://img.shields.io/pypi/v/ultraloglog.svg)](https://pypi.org/project/ultraloglog/)
+[![Documentation](https://docs.rs/ultraloglog/badge.svg)](https://docs.rs/ultraloglog)
+
 Rust implementation of the [UltraLogLog algorithm](https://arxiv.org/pdf/2308.16862). Ultraloglog is more space efficient than the widely used HyperLogLog, but can be slower. FGRA estimator or MLE estimator can be used. 
 
 ## Usage
@@ -64,7 +68,11 @@ print(f"Estimated distinct count: {ull.count()}")
 
 #### Using pip
 
-Installation with pip is on the way.
+This package is available as [`ultraloglog`](https://pypi.org/project/ultraloglog/) in PyPI. You can install it using:
+
+```bash
+pip install ultraloglog
+``` 
 
 #### From Source
 
