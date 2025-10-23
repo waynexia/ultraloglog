@@ -2,6 +2,11 @@
 // https://github.com/dynatrace-oss/hash4j/
 // See the paper "UltraLogLog: A Practical and More Space-Efficient Alternative to HyperLogLog for Approximate Distinct Counting"
 
+#[cfg(feature = "python")]
+mod python;
+#[cfg(feature = "python")]
+pub use python::*;
+
 // Constants for UltraLogLog implementation
 const MIN_P: u32 = 3;
 const MAX_P: u32 = 26; // 32 - 6 (same as Java implementation)
