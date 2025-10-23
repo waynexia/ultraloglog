@@ -1,6 +1,6 @@
 [package]
 name = "ultraloglog"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 license = "Apache-2.0"
 authors = ["Ruihang Xia <waynestxia@gmail.com>", "Jianshu Zhao <jianshuzhao@yahoo.com>"]
@@ -10,20 +10,14 @@ repository = "https://github.com/waynexia/ultraloglog"
 keywords = ["ultraloglog", "algorithm", "sketch", "probabilistic", "hyperloglog"]
 categories = ["data-structures", "algorithms"]
 
-[lib]
-name = "ultraloglog"
-crate-type = ["cdylib", "rlib"]
-
 [features]
 default = []
 serde = ["dep:serde", "dep:bincode"]
-python = ["dep:pyo3"]
 
 [dependencies]
 bincode = { version = "1.3", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 xxhash-rust = { version = "0.8", default-features = false, features = ["xxh3"] }
-pyo3 = { version = "0.22", features = ["extension-module"], optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
@@ -33,6 +27,7 @@ komihash = "0.4.1"
 polymur-hash = "0.2.2"
 wyhash = "0.6.0"
 t1ha = "0.1.2"
+streaming_algorithms = {version = "0.3.3", features = ["serde", "stdsimd"]}
 
 [[bench]]
 name = "ultraloglog"
