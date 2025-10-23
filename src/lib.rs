@@ -108,7 +108,12 @@ impl UltraLogLog {
             return 1u64 << (64 - p);
         }
         let k = 1i32.wrapping_sub(p as i32) + ((reg >> 2) as i32);
-        ((((reg & 2) | ((reg & 1) << 2)) ^ 7u8) as u64) << (63 - k) >> p
+
+        // Java’s `<< ~k`  ==>  shift by ((!k as u32) & 63)
+        let shift = ((!k) as u32) & 63;
+        let head = (((reg & 2) | ((reg & 1) << 2)) ^ 7u8) as u64;
+
+        (head << shift) >> p
     }
 
     pub fn add_value_with_build_hasher<T, S>(&mut self, value: T, build: &S) -> &mut Self
@@ -178,21 +183,28 @@ impl UltraLogLog {
         observer: Option<&mut T>,
     ) -> &mut Self {
         let q = (self.state.len() as u64 - 1).leading_zeros(); // q = 64 - p
+        let p = 64 - q;
+
         let idx = (hash_value >> q) as usize;
-        let nlz = (!hash_value << q).leading_zeros(); // nlz in {0, 1, ..., 64-p}
+
+        // nlz = lz( ~ ( (~hash) << p ) ), guaranteed in 0..=64-p
+        let nlz = (!((!hash_value) << p)).leading_zeros();
 
         let old_state = self.state[idx];
         let mut hash_prefix = Self::unpack(old_state);
-        let exp = (nlz + (64 - q)) as u32; // exp is 0‑64
-        hash_prefix |= 1u64.wrapping_shl(exp & 63); // shift modulo 64
+
+        // place the bit at nlz + p - 1 (mod 64)
+        let exp = nlz + p - 1;
+        hash_prefix |= 1u64.wrapping_shl(exp & 63);
+
         let new_state = Self::pack(hash_prefix);
 
         if let Some(obs) = observer {
             if new_state != old_state {
-                let p = 64 - q;
+                let p_u32 = p; // already u32
                 obs.state_changed(
-                    (Self::get_scaled_register_change_probability(old_state, p)
-                        - Self::get_scaled_register_change_probability(new_state, p))
+                    (Self::get_scaled_register_change_probability(old_state, p_u32)
+                        - Self::get_scaled_register_change_probability(new_state, p_u32))
                         as f64
                         * 2f64.powi(-64),
                 );
@@ -205,25 +217,31 @@ impl UltraLogLog {
 
     /// Computes a token from a given 64-bit hash value.
     pub fn compute_token(hash_value: u64) -> u32 {
-        // In the Java implementation this uses DistinctCountUtil.computeToken1
-        // For now we'll implement a simple version
-        (hash_value >> 32) as u32
+        let idx = (hash_value >> 38) as u32; // top 26 bits
+        let nlz = (!((!hash_value) << 26)).leading_zeros(); // in 0..=38
+        (idx << 6) | (nlz & 0x3f)
     }
 
-    /// Adds a new element represented by a 32-bit token
+    /// Matches DistinctCountUtil.reconstructHash
+    pub fn reconstruct_hash_from_token(token: u32) -> u64 {
+        let idx = (token & 0xFFFF_FFC0) as u64; // bits 31..6
+        let nlz = (token & 0x3f) as u32; // bits 5..0
+                                         // 38 ones shifted logically by nlz (use only nlz for the >>> on a 64-bit value)
+        let low = (0x3FFF_FFFF_FFu64) >> nlz; // 0x3FFFFFFFFF = (1<<38) - 1      // 38 ones
+        (idx << 32) | low
+    }
+
     pub fn add_token(&mut self, token: u32) -> &mut Self {
-        // Reconstruct hash from token (simplified version)
-        let hash = (token as u64) << 32;
+        let hash = Self::reconstruct_hash_from_token(token);
         self.add(hash)
     }
 
-    /// Adds a new element represented by a 32-bit token with observer
     pub fn add_token_with_observer<T: StateChangeObserver>(
         &mut self,
         token: u32,
         observer: Option<&mut T>,
     ) -> &mut Self {
-        let hash = (token as u64) << 32;
+        let hash = Self::reconstruct_hash_from_token(token);
         self.add_with_observer(hash, observer)
     }
 
@@ -284,8 +302,9 @@ impl UltraLogLog {
                     j += 1;
                     for k in 1..k_upper_bound {
                         if other_data[j] != 0 {
-                            hash_prefix |= 1u64
-                                << (k.leading_zeros() as i32 + other_p_minus_one as i32) as u32;
+                            let shift =
+                                ((k.leading_zeros() as i32 + other_p_minus_one as i32) as u32) & 63;
+                            hash_prefix |= 1u64.wrapping_shl(shift);
                         }
                         j += 1;
                     }
@@ -455,9 +474,14 @@ impl OptimalFGRAEstimator {
         let alpha = m + 3 * (c0 + c4 + c8 + c10);
         let beta = m - c0 - c4;
         let gamma = 4 * c0 + 2 * c4 + 3 * c8 + c10;
-        let quad_root_z = (((beta * beta) as f64 + 4.0 * (alpha * gamma) as f64).sqrt()
-            - beta as f64)
-            / (2.0 * alpha as f64);
+
+        // Do math in f64 to avoid i32 overflow in debug builds.
+        let alpha_f = alpha as f64;
+        let beta_f = beta as f64;
+        let gamma_f = gamma as f64;
+
+        let quad_root_z =
+            (((beta_f * beta_f) + 4.0 * (alpha_f * gamma_f)).sqrt() - beta_f) / (2.0 * alpha_f);
         let root_z = quad_root_z * quad_root_z;
         root_z * root_z
     }
@@ -537,9 +561,15 @@ impl OptimalFGRAEstimator {
         let alpha = m + 3 * (c4w0 + c4w1 + c4w2 + c4w3);
         let beta = c4w0 + c4w1 + 2 * (c4w2 + c4w3);
         let gamma = m + 2 * c4w0 + c4w2 - c4w3;
-        ((((beta * beta) as f64 + 4.0 * (alpha * gamma) as f64).sqrt() - beta as f64)
-            / (2.0 * alpha as f64))
-            .sqrt()
+
+        // Same widening to f64 here.
+        let alpha_f = alpha as f64;
+        let beta_f = beta as f64;
+        let gamma_f = gamma as f64;
+
+        let inner =
+            (((beta_f * beta_f) + 4.0 * (alpha_f * gamma_f)).sqrt() - beta_f) / (2.0 * alpha_f);
+        inner.sqrt()
     }
 
     fn phi(z: f64, z_square: f64) -> f64 {
@@ -1272,7 +1302,7 @@ mod tests {
             }
         }
 
-        // ── Sketch four keys and check the estimate ───────────────────────────────
+        // Sketch four keys and check the estimate
         let builder = T1ha0Avx2Build::default();
         let mut ull = UltraLogLog::new(8).unwrap();
 
@@ -1286,6 +1316,160 @@ mod tests {
             (est - 4.0).abs() < 0.1,
             "t1ha0-avx2 estimate {:.3} deviates too much from 4",
             est
+        );
+    }
+    #[test]
+    fn ull_vs_hll_space() {
+        use streaming_algorithms::HyperLogLog as HLL;
+
+        const N: u64 = 100_000;
+        const TRIALS: usize = 51; // odd ⇒ clean medians; bump for more stability
+        const TARGET_REL_ERR: f64 = 0.015; // 1.5% absolute relative error target
+        const HLL_MIN_P: u8 = 4;
+        const HLL_MAX_P: u8 = 16;
+
+        // deterministic 64-bit “hash” stream (SplitMix64)
+        #[inline]
+        fn splitmix64(mut x: u64) -> u64 {
+            x = x.wrapping_add(0x9E3779B97F4A7C15);
+            let mut z = x;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+            z ^ (z >> 31)
+        }
+        fn make_hashes(seed: u64) -> Vec<u64> {
+            (0..N).map(|i| splitmix64(seed.wrapping_add(i))).collect()
+        }
+
+        // single-run error helpers
+        fn err_ull(p: u32, keys: &[u64]) -> f64 {
+            let mut ull = crate::UltraLogLog::new(p).expect("valid ULL p");
+            for &h in keys {
+                ull.add(h);
+            } // ULL expects 64-bit hash
+            let est = ull.get_distinct_count_estimate();
+            (est - N as f64).abs() / (N as f64)
+        }
+        fn err_hll(p: u8, keys: &[u64]) -> f64 {
+            let mut hll = HLL::<u64>::with_p(p);
+            for &h in keys {
+                hll.push_hash64(h);
+            } // avoid rehash inside HLL
+            let est = hll.len();
+            (est - N as f64).abs() / (N as f64)
+        }
+
+        // generate deterministic per-trial seeds
+        let mut seeds = Vec::with_capacity(TRIALS);
+        let mut s = 0x1234_5678_9ABC_DEF0u64;
+        for _ in 0..TRIALS {
+            s = s
+                .wrapping_mul(0x9E3779B97F4A7C15)
+                .wrapping_add(0xD1B54A32D192ED03);
+            seeds.push(s);
+        }
+
+        // per-trial minimal p and Δp
+        let mut deltas: Vec<i32> = Vec::with_capacity(TRIALS);
+        let mut per_trial_rows: Vec<(usize, u32, u8, i32)> = Vec::with_capacity(TRIALS);
+
+        'trial: for (ti, &seed) in seeds.iter().enumerate() {
+            let keys = make_hashes(seed);
+
+            // find minimal p for ULL
+            let mut p_ull_opt = None;
+            for p in crate::MIN_P..=crate::MAX_P {
+                if err_ull(p, &keys) <= TARGET_REL_ERR {
+                    p_ull_opt = Some(p);
+                    break;
+                }
+            }
+            let p_ull = match p_ull_opt {
+                Some(p) => p,
+                None => continue 'trial, // skip if not achievable (shouldn’t happen for these N/targets)
+            };
+
+            // find minimal p for HLL
+            let mut p_hll_opt = None;
+            for p in HLL_MIN_P..=HLL_MAX_P {
+                if err_hll(p, &keys) <= TARGET_REL_ERR {
+                    p_hll_opt = Some(p);
+                    break;
+                }
+            }
+            let p_hll = match p_hll_opt {
+                Some(p) => p,
+                None => continue 'trial,
+            };
+
+            let dp = p_hll as i32 - p_ull as i32; // Δp = HLL − ULL
+            deltas.push(dp);
+            per_trial_rows.push((ti, p_ull, p_hll, dp));
+        }
+
+        if deltas.is_empty() {
+            panic!("no successful trials; try relaxing TARGET_REL_ERR or increasing p ranges");
+        }
+
+        // Δp histogram
+        use std::collections::BTreeMap;
+        let mut hist: BTreeMap<i32, usize> = BTreeMap::new();
+        for &dp in &deltas {
+            *hist.entry(dp).or_default() += 1;
+        }
+
+        // medians & means
+        let mut d_sorted = deltas.clone();
+        d_sorted.sort_unstable();
+        let median_dp = d_sorted[d_sorted.len() / 2] as f64;
+        let mean_dp = deltas.iter().copied().map(|k| k as f64).sum::<f64>() / deltas.len() as f64;
+
+        // Geometric-mean ratios via Δp:
+        // naive  = 2^{-Δp}, packed = (4/3) * 2^{-Δp}
+        let gm_naive = 2f64.powf(-mean_dp);
+        let gm_packed = (4.0 / 3.0) * gm_naive;
+
+        // Median ratios via median Δp (handy intuition):
+        let med_naive = 2f64.powf(-median_dp);
+        let med_packed = (4.0 / 3.0) * med_naive;
+
+        // Pretty print
+        println!("Trials: {}", deltas.len());
+        println!("N = {}", N);
+        println!(
+            "Target absolute relative error: {:.2}%",
+            TARGET_REL_ERR * 100.0
+        );
+        println!();
+        println!("Δp histogram (HLL − ULL):");
+        for (dp, cnt) in hist {
+            println!("  Δp={:>+2}: {:>2} trial(s)", dp, cnt);
+        }
+        println!();
+
+        println!(
+            "Geometric-mean ratios over trials:\n  \
+            packed (ULL=8b, HLL=6b): {:.3}  → savings ≈ {:.1}%\n  \
+            naive  (1B/reg)        : {:.3}  → savings ≈ {:.1}%",
+            gm_packed,
+            (1.0 - gm_packed) * 100.0,
+            gm_naive,
+            (1.0 - gm_naive) * 100.0
+        );
+        println!(
+            "Median ratios (from median Δp={}):\n  \
+            packed: {:.3}  → savings ≈ {:.1}%\n  \
+            naive : {:.3}  → savings ≈ {:.1}%",
+            median_dp as i32,
+            med_packed,
+            (1.0 - med_packed) * 100.0,
+            med_naive,
+            (1.0 - med_naive) * 100.0
+        );
+        assert!(
+            gm_packed <= 0.80,
+            "expected ≲ 0.80 (≈≥20% saving), got {:.3}",
+            gm_packed
         );
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "ultraloglog"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 license = "Apache-2.0"
 authors = ["Ruihang Xia <waynestxia@gmail.com>", "Jianshu Zhao <jianshuzhao@yahoo.com>"]
@@ -33,6 +33,7 @@ komihash = "0.4.1"
 polymur-hash = "0.2.2"
 wyhash = "0.6.0"
 t1ha = "0.1.2"
+streaming_algorithms = {version = "0.3.3", features = ["serde", "stdsimd"]}
 
 [[bench]]
 name = "ultraloglog"
