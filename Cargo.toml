@@ -10,6 +10,10 @@ repository = "https://github.com/waynexia/ultraloglog"
 keywords = ["ultraloglog", "algorithm", "sketch", "probabilistic", "hyperloglog"]
 categories = ["data-structures", "algorithms"]
 
+[lib]
+name = "ultraloglog"
+crate-type = ["cdylib", "rlib"]
+
 [features]
 default = []
 serde = ["dep:serde", "dep:bincode"]
