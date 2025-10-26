@@ -1,6 +1,6 @@
 [package]
 name = "ultraloglog"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 license = "Apache-2.0"
 authors = ["Ruihang Xia <waynestxia@gmail.com>", "Jianshu Zhao <jianshuzhao@yahoo.com>"]
@@ -23,7 +23,7 @@ python = ["dep:pyo3"]
 bincode = { version = "1.3", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 xxhash-rust = { version = "0.8", default-features = false, features = ["xxh3"] }
-pyo3 = { version = "0.22", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.27", features = ["extension-module"], optional = true }
 
 [dev-dependencies]
 criterion = "0.5"

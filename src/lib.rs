@@ -876,44 +876,63 @@ pub struct MaximumLikelihoodEstimator;
 impl Estimator for MaximumLikelihoodEstimator {
     fn estimate(&self, ull: &UltraLogLog) -> f64 {
         let state = &ull.state;
-        let p = ull.get_p();
+        let p_i32 = ull.get_p() as i32;
         let m = state.len();
 
-        let mut sum = 0i64;
+        // Use unsigned arithmetic and logical shifts to mirror Java's `>>>`.
+        let mut sum: u64 = 0;
         let mut b = vec![0i32; 64];
 
-        for &r in state {
-            let r2 = r as i32 - ((p << 2) as i32 + 4);
+        for &r_u8 in state {
+            let r = r_u8 as i32; // Java uses Byte.toUnsignedInt
+            let r2 = r - ((p_i32 << 2) + 4);
+
             if r2 < 0 {
-                let mut ret = 4i64;
+                // Small-range bucket
+                let mut ret_u: u64 = 4;
                 if r2 == -2 || r2 == -8 {
                     b[0] += 1;
-                    ret -= 2;
+                    ret_u = ret_u.wrapping_sub(2);
                 }
                 if r2 == -2 || r2 == -4 {
                     b[1] += 1;
-                    ret -= 1;
+                    ret_u = ret_u.wrapping_sub(1);
                 }
-                sum += ret << (62 - p);
+                // ret << (62 - p)
+                let sh = (62 - p_i32) as u32;
+                sum = sum.wrapping_add(ret_u << sh);
             } else {
+                // Large-range bucket
                 let k = r2 >> 2;
-                let mut ret = i64::MIN >> 2; // Equivalent to 0xE000000000000000i64
-                let y0 = (r & 1) as i32;
-                let y1 = ((r >> 1) & 1) as i32;
-                ret -= (y0 as i64) << 63;
-                ret -= (y1 as i64) << 62;
-                b[k as usize] += y0;
-                b[(k + 1) as usize] += y1;
+                let y0 = (r & 1) as u64;
+                let y1 = ((r >> 1) & 1) as u64;
+
+                // 0xE000_0000_0000_0000L minus top-bit masks; Java then uses `>>>`
+                let mut ret_u: u64 = 0xE000_0000_0000_0000u64;
+                ret_u = ret_u.wrapping_sub(y0 << 63);
+                ret_u = ret_u.wrapping_sub(y1 << 62);
+
+                // shift count is masked in Java: (k + p) & 63
+                let sh: u32 = ((k + p_i32) & 63) as u32;
+                sum = sum.wrapping_add(ret_u >> sh);
+
+                // tallies for the Newton solver
+                b[k as usize] += y0 as i32;
+                b[(k + 1) as usize] += y1 as i32;
                 b[(k + 2) as usize] += 1;
-                sum += ret >> (k + p as i32);
             }
         }
 
         if sum == 0 {
-            return if state[0] == 0 { 0.0 } else { f64::INFINITY };
+            return if state.get(0).copied().unwrap_or(0) == 0 {
+                0.0
+            } else {
+                f64::INFINITY
+            };
         }
 
-        b[63 - p as usize] += b[64 - p as usize];
+        b[(63 - p_i32) as usize] += b[(64 - p_i32) as usize];
+
         let factor = (m << 1) as f64;
         let a = (sum as f64) * factor * 2f64.powi(-64);
 
@@ -921,12 +940,13 @@ impl Estimator for MaximumLikelihoodEstimator {
             * solve_maximum_likelihood_equation(
                 a,
                 &b,
-                63 - p as i32,
+                63 - p_i32,
                 ML_EQUATION_SOLVER_EPS / (m as f64).sqrt(),
             )
             / (1.0 + ML_BIAS_CORRECTION_CONSTANT / m as f64)
     }
 }
+
 
 // Helper function for MaximumLikelihoodEstimator
 fn solve_maximum_likelihood_equation(a: f64, b: &[i32], max_k: i32, eps: f64) -> f64 {
