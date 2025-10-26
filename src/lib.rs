@@ -43,6 +43,9 @@ const P_INITIAL: f64 = ETA_X * (POW_4_MINUS_TAU / (2.0 - POW_2_MINUS_TAU));
 const INV_SQRT_FISHER_INFORMATION: f64 = 0.7608621002725182;
 const ML_EQUATION_SOLVER_EPS: f64 = 0.001 * INV_SQRT_FISHER_INFORMATION;
 const ML_BIAS_CORRECTION_CONSTANT: f64 = 0.48147376527720065;
+const C0: f64 = -1.0 / 3.0;
+const C1: f64 = 1.0 / 45.0;
+const C2: f64 = 1.0 / 472.5;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -89,17 +92,28 @@ impl UltraLogLog {
         self.state.fill(0);
     }
 
-    // Helper functions for bit manipulation
     fn unpack(register: u8) -> u64 {
+        // Java: (4L | (register & 3)) << ((register >>> 2) - 2)
+        // BUT: Java shifts are mod 64. Mirror that explicitly.
         if register == 0 {
             return 0;
         }
-        (4u64 | (register & 3) as u64) << ((register >> 2).wrapping_sub(2))
+        let sh = ((((register as u32) >> 2).wrapping_sub(2)) & 63) as u32;
+        (4u64 | ((register & 3) as u64)).wrapping_shl(sh)
     }
 
     fn pack(hash_prefix: u64) -> u8 {
-        let nlz = hash_prefix.leading_zeros() + 1;
-        ((((nlz as i32).wrapping_neg()) << 2) | ((hash_prefix << nlz) >> 62) as i32) as u8
+        // Java: nlz = Long.numberOfLeadingZeros(hashPrefix) + 1
+        //        return (byte)((-nlz << 2) | ((hashPrefix << nlz) >>> 62));
+        // Again, enforce mod-64 on the left shift to match Java semantics.
+        debug_assert!(
+            hash_prefix != 0,
+            "pack() must be called with nonzero hash_prefix"
+        );
+        let nlz = hash_prefix.leading_zeros() + 1; // 1..=64
+        let s = (nlz & 63) as u32;
+        let y = (hash_prefix.wrapping_shl(s) >> 62) as u8; // top 2 bits after masked shift
+        (((-(nlz as i32)) << 2) | (y as i32)) as u8
     }
 
     /// Get the scaled register change probability
@@ -180,38 +194,38 @@ impl UltraLogLog {
     pub fn add_with_observer<T: StateChangeObserver>(
         &mut self,
         hash_value: u64,
-        observer: Option<&mut T>,
+        mut observer: Option<&mut T>,
     ) -> &mut Self {
-        let q = (self.state.len() as u64 - 1).leading_zeros(); // q = 64 - p
-        let p = 64 - q;
+        // q = Long.numberOfLeadingZeros(state.length - 1L)  (i.e., 64 - p)
+        let q: u32 = (self.state.len() as u64 - 1).leading_zeros();
+        let p: u32 = 64 - q;
 
         let idx = (hash_value >> q) as usize;
 
-        // nlz = lz( ~ ( (~hash) << p ) ), guaranteed in 0..=64-p
-        let nlz = (!((!hash_value) << p)).leading_zeros();
+        // nlz = Long.numberOfLeadingZeros(~(~hash << p)) with p masked like Java
+        let nlz: u32 = (!((!hash_value).wrapping_shl(p & 63))).leading_zeros();
 
-        let old_state = self.state[idx];
-        let mut hash_prefix = Self::unpack(old_state);
+        let old = self.state[idx];
+        let mut hp = Self::unpack(old);
 
-        // place the bit at nlz + p - 1 (mod 64)
-        let exp = nlz + p - 1;
-        hash_prefix |= 1u64.wrapping_shl(exp & 63);
+        // Java: 1L << (nlz + ~q) ; since shifts are mod 64, (nlz + ~q) ≡ (nlz + p - 1) mod 64
+        let bitpos = ((nlz + p - 1) & 63) as u32;
+        hp |= 1u64.wrapping_shl(bitpos);
 
-        let new_state = Self::pack(hash_prefix);
+        let new = Self::pack(hp);
 
-        if let Some(obs) = observer {
-            if new_state != old_state {
-                let p_u32 = p; // already u32
-                obs.state_changed(
-                    (Self::get_scaled_register_change_probability(old_state, p_u32)
-                        - Self::get_scaled_register_change_probability(new_state, p_u32))
-                        as f64
-                        * 2f64.powi(-64),
-                );
+        if let Some(obs) = observer.as_deref_mut() {
+            if new != old {
+                let pu = p as u32;
+                let dec = (Self::get_scaled_register_change_probability(old, pu)
+                    .wrapping_sub(Self::get_scaled_register_change_probability(new, pu)))
+                    as f64
+                    * 2f64.powi(-64);
+                obs.state_changed(dec);
             }
         }
 
-        self.state[idx] = new_state;
+        self.state[idx] = new;
         self
     }
 
@@ -947,29 +961,112 @@ impl Estimator for MaximumLikelihoodEstimator {
     }
 }
 
-
 // Helper function for MaximumLikelihoodEstimator
-fn solve_maximum_likelihood_equation(a: f64, b: &[i32], max_k: i32, eps: f64) -> f64 {
-    let mut x = 1.0;
-    let mut dx;
-    loop {
-        let mut s = 0.0;
-        let mut ds = 0.0;
-        for k in 0..=max_k {
-            if b[k as usize] != 0 {
-                let t = 2f64.powi(-k);
-                let y = x * t;
-                let z = 1.0 + y;
-                s += b[k as usize] as f64 * y / z;
-                ds += b[k as usize] as f64 * t / (z * z);
-            }
-        }
-        dx = (a - s) / ds;
-        x += dx;
-        if dx.abs() <= eps * x {
-            break;
+fn solve_maximum_likelihood_equation(a: f64, b: &[i32], n: i32, relative_error_limit: f64) -> f64 {
+    // Java: if (a == 0.) return +INF;
+    if a == 0.0 {
+        return f64::INFINITY;
+    }
+
+    // Find kMax = largest index <= n with b[k] > 0
+    let mut k_max: i32 = n;
+    while k_max >= 0 && b[k_max as usize] == 0 {
+        k_max -= 1;
+    }
+    // If all b are zero -> return 0
+    if k_max < 0 {
+        return 0.0;
+    }
+
+    // Compute kMin, s1 = Σ b[k], s2 = Σ b[k] * 2^k  (over nonzero entries)
+    let mut k_min: i32 = k_max;
+    let mut s1: i64 = b[k_max as usize] as i64;
+    let mut s2: f64 = (b[k_max as usize] as f64) * (2f64).powi(k_max);
+
+    for k in (0..k_max as usize).rev() {
+        let t = b[k];
+        if t > 0 {
+            s1 += t as i64;
+            s2 += (t as f64) * (2f64).powi(k as i32);
+            k_min = k as i32;
         }
     }
+
+    let s1_f = s1 as f64;
+
+    // Initial x (exactly as in Java)
+    let mut x = if s2 <= 1.5 * a {
+        s1_f / (0.5 * s2 + a)
+    } else {
+        // ln1p(s2/a) * (s1/s2)
+        (1.0 + s2 / a).ln() * (s1_f / s2)
+    };
+
+    let mut delta_x = x;
+    let mut g_prev = 0.0;
+
+    // Iterate until relative change is small
+    while delta_x > x * relative_error_limit {
+        // kappa = exponent(x) - 1021 (bit-exact port)
+        let raw_x = x.to_bits();
+        let exp_bits = ((raw_x & 0x7FF0_0000_0000_0000u64) >> 52) as i32;
+        let kappa = exp_bits - 1021;
+
+        // xPrime = x / 2^(max(kMax, kappa)+1)  ∈ [0, 0.25]
+        let max_k = if k_max > kappa { k_max } else { kappa };
+        let xprime_bits = raw_x.wrapping_sub(((max_k + 1) as u64) << 52);
+        let mut x_prime = f64::from_bits(xprime_bits);
+
+        // h(xPrime) ≈ xPrime + xPrime^2 * (C0 + xPrime^2 * (C1 - xPrime^2 * C2))
+        let x_prime2 = x_prime * x_prime;
+        let mut h = x_prime + x_prime2 * (C0 + x_prime2 * (C1 - x_prime2 * C2));
+
+        // First loop: for k = kappa-1 down to kMax
+        //   h = (xPrime + h*(1-h)) / (xPrime + (1-h)); xPrime *= 2
+        if kappa - 1 >= k_max {
+            let mut k = kappa - 1;
+            loop {
+                let h_prime = 1.0 - h;
+                h = (x_prime + h * h_prime) / (x_prime + h_prime);
+                x_prime += x_prime; // *= 2
+                if k == k_max {
+                    break;
+                }
+                k -= 1;
+            }
+        }
+
+        // g accumulation
+        let mut g = (b[k_max as usize] as f64) * h;
+
+        // Second loop: for k = kMax-1 down to kMin
+        if k_max - 1 >= k_min {
+            let mut k = k_max - 1;
+            loop {
+                let h_prime = 1.0 - h;
+                h = (x_prime + h * h_prime) / (x_prime + h_prime);
+                x_prime += x_prime; // *= 2
+                g += (b[k as usize] as f64) * h;
+                if k == k_min {
+                    break;
+                }
+                k -= 1;
+            }
+        }
+
+        // g += x * a
+        g += x * a;
+
+        // Step update (exactly as Java)
+        if g_prev < g && g <= s1_f {
+            delta_x *= (g - s1_f) / (g_prev - g);
+        } else {
+            delta_x = 0.0;
+        }
+        x += delta_x;
+        g_prev = g;
+    }
+
     x
 }
 
@@ -1490,6 +1587,111 @@ mod tests {
             gm_packed <= 0.80,
             "expected ≲ 0.80 (≈≥20% saving), got {:.3}",
             gm_packed
+        );
+    }
+    #[test]
+    fn mle_vs_hll_accuracy_large_n() {
+        use streaming_algorithms::HyperLogLog as HLL;
+
+        // config
+        const P_ULL: u32 = 16; // ULL precision (2^16 regs)
+        const P_HLL: u8 = 16; // HLL precision to compare
+        const N: u64 = 1_000_000; // large cardinality
+        const TRIALS: usize = 10; // “10 or so” runs
+
+        // accumulators
+        let mut sum_rel_err_mle = 0.0f64;
+        let mut sum_rel_err_hll = 0.0f64;
+        let mut sumsq_rel_err_mle = 0.0f64;
+        let mut sumsq_rel_err_hll = 0.0f64;
+
+        // deterministic trial seeds
+        let mut seed = 0x1234_5678_9ABC_DEF0u64;
+
+        println!(
+            "Comparing MLE vs HLL over {} trials | N={} | p_ull={} p_hll={}",
+            TRIALS, N, P_ULL, P_HLL
+        );
+
+        for t in 0..TRIALS {
+            // bump seed (simple LCG-ish hop)
+            seed = seed
+                .wrapping_mul(0x9E3779B97F4A7C15)
+                .wrapping_add(0xD1B54A32D192ED03);
+
+            // generate N pseudorandom 64-bit values
+            let mut keys = Vec::with_capacity(N as usize);
+            let mut x = seed;
+            for _ in 0..N {
+                x = x.wrapping_add(0x9E3779B97F4A7C15);
+                let mut z = x;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+                z ^= z >> 31;
+                keys.push(z);
+            }
+
+            // feed ULL
+            let mut ull = UltraLogLog::new(P_ULL).expect("valid p");
+            for &h in &keys {
+                ull.add(h); // already 64-bit hash values
+            }
+            let mle = MaximumLikelihoodEstimator;
+            let est_mle = mle.estimate(&ull);
+
+            // feed HLL (use push_hash64)
+            let mut hll = HLL::<u64>::with_p(P_HLL);
+            for &h in &keys {
+                hll.push_hash64(h);
+            }
+            let est_hll = hll.len();
+
+            // relative errors
+            let n_f = N as f64;
+            let rel_mle = (est_mle - n_f) / n_f;
+            let rel_hll = (est_hll - n_f) / n_f;
+
+            sum_rel_err_mle += rel_mle;
+            sum_rel_err_hll += rel_hll;
+            sumsq_rel_err_mle += rel_mle * rel_mle;
+            sumsq_rel_err_hll += rel_hll * rel_hll;
+
+            println!(
+                "[trial {:02}] MLE rel.err = {:+.4}%   HLL rel.err = {:+.4}%",
+                t,
+                rel_mle * 100.0,
+                rel_hll * 100.0
+            );
+        }
+
+        // RMSE (relative) & mean bias
+        let t_f = TRIALS as f64;
+        let rmse_mle = (sumsq_rel_err_mle / t_f).sqrt();
+        let rmse_hll = (sumsq_rel_err_hll / t_f).sqrt();
+        let mean_mle = sum_rel_err_mle / t_f;
+        let mean_hll = sum_rel_err_hll / t_f;
+
+        println!(
+            "\nRelative RMSE:  MLE = {:.4}%   HLL = {:.4}%",
+            rmse_mle * 100.0,
+            rmse_hll * 100.0
+        );
+        println!(
+            "Mean bias:      MLE = {:+.4}%  HLL = {:+.4}%",
+            mean_mle * 100.0,
+            mean_hll * 100.0
+        );
+
+        // sanity: with p=16, expected SE around ~0.4% for HLL; allow slack in debug
+        assert!(
+            rmse_mle < 0.01,
+            "MLE RMSE too large: {:.4}%",
+            rmse_mle * 100.0
+        );
+        assert!(
+            rmse_hll < 0.01,
+            "HLL RMSE too large: {:.4}%",
+            rmse_hll * 100.0
         );
     }
 }
