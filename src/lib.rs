@@ -106,7 +106,10 @@ impl UltraLogLog {
         // Java: nlz = Long.numberOfLeadingZeros(hashPrefix) + 1
         //        return (byte)((-nlz << 2) | ((hashPrefix << nlz) >>> 62));
         // Again, enforce mod-64 on the left shift to match Java semantics.
-        debug_assert!(hash_prefix != 0, "pack() must be called with nonzero hash_prefix");
+        debug_assert!(
+            hash_prefix != 0,
+            "pack() must be called with nonzero hash_prefix"
+        );
         let nlz = hash_prefix.leading_zeros() + 1; // 1..=64
         let s = (nlz & 63) as u32;
         let y = (hash_prefix.wrapping_shl(s) >> 62) as u8; // top 2 bits after masked shift
@@ -215,7 +218,8 @@ impl UltraLogLog {
             if new != old {
                 let pu = p as u32;
                 let dec = (Self::get_scaled_register_change_probability(old, pu)
-                    .wrapping_sub(Self::get_scaled_register_change_probability(new, pu))) as f64
+                    .wrapping_sub(Self::get_scaled_register_change_probability(new, pu)))
+                    as f64
                     * 2f64.powi(-64);
                 obs.state_changed(dec);
             }
@@ -957,7 +961,6 @@ impl Estimator for MaximumLikelihoodEstimator {
     }
 }
 
-
 // Helper function for MaximumLikelihoodEstimator
 fn solve_maximum_likelihood_equation(a: f64, b: &[i32], n: i32, relative_error_limit: f64) -> f64 {
     // Java: if (a == 0.) return +INF;
@@ -1026,7 +1029,9 @@ fn solve_maximum_likelihood_equation(a: f64, b: &[i32], n: i32, relative_error_l
                 let h_prime = 1.0 - h;
                 h = (x_prime + h * h_prime) / (x_prime + h_prime);
                 x_prime += x_prime; // *= 2
-                if k == k_max { break; }
+                if k == k_max {
+                    break;
+                }
                 k -= 1;
             }
         }
@@ -1042,7 +1047,9 @@ fn solve_maximum_likelihood_equation(a: f64, b: &[i32], n: i32, relative_error_l
                 h = (x_prime + h * h_prime) / (x_prime + h_prime);
                 x_prime += x_prime; // *= 2
                 g += (b[k as usize] as f64) * h;
-                if k == k_min { break; }
+                if k == k_min {
+                    break;
+                }
                 k -= 1;
             }
         }
@@ -1586,13 +1593,13 @@ mod tests {
     fn mle_vs_hll_accuracy_large_n() {
         use streaming_algorithms::HyperLogLog as HLL;
 
-        // --- config ---
-        const P_ULL: u32 = 16;      // ULL precision (2^16 regs)
-        const P_HLL: u8  = 16;      // HLL precision to compare
-        const N: u64     = 1_000_000; // large cardinality
-        const TRIALS: usize = 10;   // “10 or so” runs
+        // config
+        const P_ULL: u32 = 16; // ULL precision (2^16 regs)
+        const P_HLL: u8 = 16; // HLL precision to compare
+        const N: u64 = 1_000_000; // large cardinality
+        const TRIALS: usize = 10; // “10 or so” runs
 
-        // --- accumulators ---
+        // accumulators
         let mut sum_rel_err_mle = 0.0f64;
         let mut sum_rel_err_hll = 0.0f64;
         let mut sumsq_rel_err_mle = 0.0f64;
@@ -1612,7 +1619,7 @@ mod tests {
                 .wrapping_mul(0x9E3779B97F4A7C15)
                 .wrapping_add(0xD1B54A32D192ED03);
 
-            // ---------- generate N pseudorandom 64-bit values (SplitMix64 inline) ----------
+            // generate N pseudorandom 64-bit values
             let mut keys = Vec::with_capacity(N as usize);
             let mut x = seed;
             for _ in 0..N {
@@ -1624,7 +1631,7 @@ mod tests {
                 keys.push(z);
             }
 
-            // ---------- feed ULL ----------
+            // feed ULL
             let mut ull = UltraLogLog::new(P_ULL).expect("valid p");
             for &h in &keys {
                 ull.add(h); // already 64-bit hash values
@@ -1632,14 +1639,14 @@ mod tests {
             let mle = MaximumLikelihoodEstimator;
             let est_mle = mle.estimate(&ull);
 
-            // ---------- feed HLL (use push_hash64 to avoid a rehash) ----------
+            // feed HLL (use push_hash64)
             let mut hll = HLL::<u64>::with_p(P_HLL);
             for &h in &keys {
                 hll.push_hash64(h);
             }
             let est_hll = hll.len();
 
-            // ---------- relative errors ----------
+            // relative errors
             let n_f = N as f64;
             let rel_mle = (est_mle - n_f) / n_f;
             let rel_hll = (est_hll - n_f) / n_f;
@@ -1657,7 +1664,7 @@ mod tests {
             );
         }
 
-        // ---------- RMSE (relative) & mean bias ----------
+        // RMSE (relative) & mean bias
         let t_f = TRIALS as f64;
         let rmse_mle = (sumsq_rel_err_mle / t_f).sqrt();
         let rmse_hll = (sumsq_rel_err_hll / t_f).sqrt();
@@ -1676,7 +1683,15 @@ mod tests {
         );
 
         // sanity: with p=16, expected SE around ~0.4% for HLL; allow slack in debug
-        assert!(rmse_mle < 0.01, "MLE RMSE too large: {:.4}%", rmse_mle * 100.0);
-        assert!(rmse_hll < 0.01, "HLL RMSE too large: {:.4}%", rmse_hll * 100.0);
+        assert!(
+            rmse_mle < 0.01,
+            "MLE RMSE too large: {:.4}%",
+            rmse_mle * 100.0
+        );
+        assert!(
+            rmse_hll < 0.01,
+            "HLL RMSE too large: {:.4}%",
+            rmse_hll * 100.0
+        );
     }
 }
