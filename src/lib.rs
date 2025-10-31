@@ -7,6 +7,11 @@ mod python;
 #[cfg(feature = "python")]
 pub use python::*;
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+use std::hash::{BuildHasher, Hash, Hasher};
+use xxhash_rust::xxh3::Xxh3;
+
 // Constants for UltraLogLog implementation
 const MIN_P: u32 = 3;
 const MAX_P: u32 = 26; // 32 - 6 (same as Java implementation)
@@ -41,16 +46,12 @@ const P_INITIAL: f64 = ETA_X * (POW_4_MINUS_TAU / (2.0 - POW_2_MINUS_TAU));
 
 // Constants for MaximumLikelihoodEstimator
 const INV_SQRT_FISHER_INFORMATION: f64 = 0.7608621002725182;
-const ML_EQUATION_SOLVER_EPS: f64 = 0.001 * INV_SQRT_FISHER_INFORMATION;
+const ML_EQUATION_SOLVER_EPS: f64 = 0.0001 * INV_SQRT_FISHER_INFORMATION;
 const ML_BIAS_CORRECTION_CONSTANT: f64 = 0.48147376527720065;
 const C0: f64 = -1.0 / 3.0;
 const C1: f64 = 1.0 / 45.0;
 const C2: f64 = 1.0 / 472.5;
 
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
-use std::hash::{BuildHasher, Hash, Hasher};
-use xxhash_rust::xxh3::Xxh3;
 
 /// A trait for observing state changes in the UltraLogLog sketch
 pub trait StateChangeObserver {
@@ -1066,7 +1067,6 @@ fn solve_maximum_likelihood_equation(a: f64, b: &[i32], n: i32, relative_error_l
         x += delta_x;
         g_prev = g;
     }
-
     x
 }
 
@@ -1693,5 +1693,80 @@ mod tests {
             "HLL RMSE too large: {:.4}%",
             rmse_hll * 100.0
         );
+    }
+    #[test]
+    fn compare_fgra_vs_mle_speed() {
+        use std::time::Instant;
+
+        // we want a few sketches per p so the timing is less noisy
+        const SKETCHES_PER_P: usize = 64;
+
+        // splitmix64 for deterministic 64-bit values
+        #[inline]
+        fn splitmix64(mut x: u64) -> u64 {
+            x = x.wrapping_add(0x9E3779B97F4A7C15);
+            let mut z = x;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+            z ^ (z >> 31)
+        }
+
+        println!("FGRA vs MLE, real sketches ({} sketches per p)", SKETCHES_PER_P);
+        for p in 10u32..=16 {
+            let m = 1usize << p;          // #registers
+            let n_items = 5usize * m;     // “realistic enough” load for ULL
+            let mut sketches = Vec::with_capacity(SKETCHES_PER_P);
+
+            // build real sketches (measure “sketching” time)
+            let t_sketch_start = Instant::now();
+            let mut seed = 0x1234_5678_9ABC_DEF0u64 ^ (p as u64);
+            for _ in 0..SKETCHES_PER_P {
+                let mut ull = UltraLogLog::new(p).expect("valid p");
+                let mut x = seed;
+                for _ in 0..n_items {
+                    x = splitmix64(x);
+                    ull.add(x); // real path: hashing already done → add(hash)
+                }
+                sketches.push(ull);
+                // move seed a bit so next sketch gets a different stream
+                seed = seed
+                    .wrapping_mul(0x9E3779B97F4A7C15)
+                    .wrapping_add(0xD1B54A32D192ED03);
+            }
+            let sketch_elapsed = t_sketch_start.elapsed();
+            let per_sketch_sketching =
+                sketch_elapsed.as_secs_f64() * 1e6 / (SKETCHES_PER_P as f64); // µs/sketch
+
+            // estimate via FGRA
+            let fgra = OptimalFGRAEstimator;
+            let t_fgra_start = Instant::now();
+            let mut fgra_sink = 0.0f64;
+            for s in &sketches {
+                fgra_sink += fgra.estimate(s);
+            }
+            let fgra_elapsed = t_fgra_start.elapsed();
+            let per_est_fgra = fgra_elapsed.as_secs_f64() * 1e6 / (SKETCHES_PER_P as f64);
+
+            // estimate via MLE
+            let mle = MaximumLikelihoodEstimator;
+            let t_mle_start = Instant::now();
+            let mut mle_sink = 0.0f64;
+            for s in &sketches {
+                mle_sink += mle.estimate(s);
+            }
+            let mle_elapsed = t_mle_start.elapsed();
+            let per_est_mle = mle_elapsed.as_secs_f64() * 1e6 / (SKETCHES_PER_P as f64);
+
+            println!(
+                "p={:<2}  m={:>6}  build: {:8.3} µs/sketch   FGRA: {:8.3} µs/estimate   MLE: {:8.3} µs/estimate   (sinks {:.3} {:.3})",
+                p,
+                m,
+                per_sketch_sketching,
+                per_est_fgra,
+                per_est_mle,
+                fgra_sink,
+                mle_sink
+            );
+        }
     }
 }
