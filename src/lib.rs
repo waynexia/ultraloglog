@@ -1698,7 +1698,7 @@ mod tests {
     fn compare_fgra_vs_mle_speed() {
         use std::time::Instant;
 
-        // we want a few sketches per p so the timing is less noisy
+        // original part
         const SKETCHES_PER_P: usize = 64;
 
         // splitmix64 for deterministic 64-bit values
@@ -1711,13 +1711,16 @@ mod tests {
             z ^ (z >> 31)
         }
 
-        println!("FGRA vs MLE, real sketches ({} sketches per p)", SKETCHES_PER_P);
+        println!(
+            "FGRA vs MLE, real sketches ({} sketches per p)",
+            SKETCHES_PER_P
+        );
         for p in 10u32..=16 {
-            let m = 1usize << p;          // #registers
-            let n_items = 5usize * m;     // “realistic enough” load for ULL
+            let m = 1usize << p;        // #registers
+            let n_items = 5usize * m;   // your “realistic enough” load
             let mut sketches = Vec::with_capacity(SKETCHES_PER_P);
 
-            // build real sketches (measure “sketching” time)
+            // build real sketches (measure build time)
             let t_sketch_start = Instant::now();
             let mut seed = 0x1234_5678_9ABC_DEF0u64 ^ (p as u64);
             for _ in 0..SKETCHES_PER_P {
@@ -1725,10 +1728,9 @@ mod tests {
                 let mut x = seed;
                 for _ in 0..n_items {
                     x = splitmix64(x);
-                    ull.add(x); // real path: hashing already done → add(hash)
+                    ull.add(x);
                 }
                 sketches.push(ull);
-                // move seed a bit so next sketch gets a different stream
                 seed = seed
                     .wrapping_mul(0x9E3779B97F4A7C15)
                     .wrapping_add(0xD1B54A32D192ED03);
@@ -1737,7 +1739,7 @@ mod tests {
             let per_sketch_sketching =
                 sketch_elapsed.as_secs_f64() * 1e6 / (SKETCHES_PER_P as f64); // µs/sketch
 
-            // estimate via FGRA
+            // FGRA
             let fgra = OptimalFGRAEstimator;
             let t_fgra_start = Instant::now();
             let mut fgra_sink = 0.0f64;
@@ -1747,7 +1749,7 @@ mod tests {
             let fgra_elapsed = t_fgra_start.elapsed();
             let per_est_fgra = fgra_elapsed.as_secs_f64() * 1e6 / (SKETCHES_PER_P as f64);
 
-            // estimate via MLE
+            // MLE
             let mle = MaximumLikelihoodEstimator;
             let t_mle_start = Instant::now();
             let mut mle_sink = 0.0f64;
@@ -1767,6 +1769,77 @@ mod tests {
                 fgra_sink,
                 mle_sink
             );
+        }
+
+        // ---------------------------------------------------------------------
+        // extra part: stress at large cardinalities (1M → 10M)
+        // ---------------------------------------------------------------------
+        // smaller to keep runtime sane
+        const SKETCHES_PER_CASE: usize = 8;
+        // you said “1 million to 10 million”
+        const BIG_NS: [usize; 4] = [1_000_000, 2_000_000, 5_000_000, 10_000_000];
+
+        println!("\nFGRA vs MLE, large cardinalities ({} sketches/case)", SKETCHES_PER_CASE);
+        for p in 10u32..=16 {
+            let m = 1usize << p;
+            for &n_items in &BIG_NS {
+                // build real sketches of size ≈ n_items
+                let t_sketch_start = Instant::now();
+                let mut sketches = Vec::with_capacity(SKETCHES_PER_CASE);
+                let mut seed = 0xF00D_F00D_DEAD_BEEFu64
+                    ^ ((p as u64) << 32)
+                    ^ (n_items as u64);
+                for _ in 0..SKETCHES_PER_CASE {
+                    let mut ull = UltraLogLog::new(p).expect("valid p");
+                    let mut x = seed;
+                    for _ in 0..n_items {
+                        x = splitmix64(x);
+                        ull.add(x);
+                    }
+                    sketches.push(ull);
+                    // shift seed a bit
+                    seed = seed
+                        .wrapping_mul(0x9E3779B97F4A7C15)
+                        .wrapping_add(0xD1B54A32D192ED03);
+                }
+                let sketch_elapsed = t_sketch_start.elapsed();
+                let per_sketch_build =
+                    sketch_elapsed.as_secs_f64() * 1e6 / (SKETCHES_PER_CASE as f64);
+
+                // FGRA timing
+                let fgra = OptimalFGRAEstimator;
+                let t_fgra_start = Instant::now();
+                let mut fgra_sink = 0.0f64;
+                for s in &sketches {
+                    fgra_sink += fgra.estimate(s);
+                }
+                let fgra_elapsed = t_fgra_start.elapsed();
+                let per_est_fgra =
+                    fgra_elapsed.as_secs_f64() * 1e6 / (SKETCHES_PER_CASE as f64);
+
+                // MLE timing
+                let mle = MaximumLikelihoodEstimator;
+                let t_mle_start = Instant::now();
+                let mut mle_sink = 0.0f64;
+                for s in &sketches {
+                    mle_sink += mle.estimate(s);
+                }
+                let mle_elapsed = t_mle_start.elapsed();
+                let per_est_mle =
+                    mle_elapsed.as_secs_f64() * 1e6 / (SKETCHES_PER_CASE as f64);
+
+                println!(
+                    "p={:<2}  m={:>6}  N={:>8}  build: {:9.3} µs/sketch   FGRA: {:8.3} µs/est   MLE: {:8.3} µs/est   (sinks {:.3} {:.3})",
+                    p,
+                    m,
+                    n_items,
+                    per_sketch_build,
+                    per_est_fgra,
+                    per_est_mle,
+                    fgra_sink,
+                    mle_sink
+                );
+            }
         }
     }
 }
