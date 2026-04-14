@@ -27,7 +27,7 @@ pyo3 = { version = "0.27", features = ["extension-module"], optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
-rand = "0.8"
+rand = "0.9"
 ahash = "0.8"
 komihash = "0.4.1"
 polymur-hash = "0.2.2"
